@@ -44,7 +44,7 @@ Manipulating module defaults:
     MIME::Charset::default("iso-8859-1");
     MIME::Charset::fallback("us-ascii");
 
-Non-OOP functions (may be deprecated in near future):
+Non-OO functions (may be deprecated in near future):
 
     use MIME::Charset qw(:info);
 
@@ -121,7 +121,7 @@ if (USE_ENCODE) {
     }
 }
 
-$VERSION = '1.002';
+$VERSION = '1.003';
 
 ######## Private Attributes ########
 
@@ -155,6 +155,7 @@ my %CHARSETS = (# input		    header enc body enc output conv
 		'ISO-2022-JP' =>	['B',	undef,	undef],
 		'KOI8-R' =>		['B',	'B',	undef],
 		'UTF-8' =>		['S',	'B',	undef],
+		'GSM03.38' =>		[undef,	undef,	undef], # not for MIME
 		# We're making this one up to represent raw unencoded 8bit
 		'8BIT' =>		[undef,	'B',	'ISO-8859-1'],
 		);
@@ -172,9 +173,10 @@ my %CHARSET_ALIASES = (# unpreferred		preferred
 		       "KS_C_5601" =>		"KS_C_5601-1987",
 		       "SHIFTJIS" =>		"SHIFT_JIS",
 		       "SHIFTJISX0213" =>	"SHIFT_JISX0213",
-		       "UNICODE-1-1-UTF-7" =>	"UTF-7",
+		       "UNICODE-1-1-UTF-7" =>	"UTF-7", # RFC 1642 (obs.)
 		       "UTF8" =>		"UTF-8",
-		       "UTF-8-STRICT" =>	"UTF-8",
+		       "UTF-8-STRICT" =>	"UTF-8", # Perl internal use
+		       "GSM0338" =>		"GSM03.38",
 		       );
 
 # Some vendors encode characters beyond standardized mappings using extended
@@ -200,7 +202,7 @@ my %ENCODERS = (
 				     ['iso-2022-jp-ms', 'Encode::ISO2022JPMS'],
 				     ['iso-2022-jp-1'], # Encode::JP (note*)
 				    ],
-		    'SHIFT_JIS'  => [['cp932'], ],      # Encode::JP (note*)
+		    'SHIFT_JIS'  => [['cp932'], ],      # Encode::JP
 		    'EUC-KR'     => [['cp949'], ],      # Encode::KR
 		    'BIG5'       => [
 				     # ['big5plus',     'Encode::HanExtra'],
@@ -217,13 +219,14 @@ my %ENCODERS = (
 		    'ISO-2022-JP-3' => [['iso-2022-jp-3', 'Encode::JIS2K'], ],
 		    'SHIFT_JISX0213'=> [['shiftjisx0213', 'Encode::JIS2K'], ],
 		    'EUC-TW'        => [['euc-tw',      'Encode::HanExtra'], ],
+		    'GSM03.38'      => [['gsm0338'], ],	# Encode::GSM0338
 		},
 );
 
-# note*: This encoder is not UCM-based.
-
-# ISO-2022-* escape sequnces to detect charset from unencoded data.
-my @ISO2022_SEQ = (# escape seq	possible charset
+# ISO-2022-* escape sequences etc. to detect charset from unencoded data.
+my @ESCAPE_SEQS = ( 
+		# ISO-2022-* sequences
+		   # escape seq, possible charset
 		   # Following sequences are commonly used.
 		   ["\033\$\@",	"ISO-2022-JP"],	# RFC 1468
 		   ["\033\$B",	"ISO-2022-JP"],	# ditto
@@ -238,13 +241,28 @@ my @ISO2022_SEQ = (# escape seq	possible charset
 		   ["\033\$*H",	"ISO-2022-CN"], # ditto
 		   # Other sequences will be used with appropriate charset
 		   # parameters, or hardly used.
-		   );
 
 		   # note*: This RFC defines ISO-2022-JP-1, superset of 
 		   # ISO-2022-JP.  But that charset name is rarely used.
 		   # OTOH many of encoders for ISO-2022-JP recognize this
 		   # sequence so that comatibility with EUC-JP will be
 		   # guaranteed.
+
+		# Singlebyte 7-bit sequences
+		   # escape seq, possible charset
+		   ["\033e",	"GSM03.38"],	# ESTI GSM 03.38 (note*)
+		   ["\033\012",	"GSM03.38"],	# ditto
+		   ["\033<",	"GSM03.38"],	# ditto
+		   ["\033/",	"GSM03.38"],	# ditto
+		   ["\033>",	"GSM03.38"],	# ditto
+		   ["\033\024",	"GSM03.38"],	# ditto
+		   ["\033(",	"GSM03.38"],	# ditto
+		   ["\033\@",	"GSM03.38"],	# ditto
+		   ["\033)",	"GSM03.38"],	# ditto
+		   ["\033=",	"GSM03.38"],	# ditto
+
+		   # note*: This is not used for MIME message.
+		  );
 
 ######## Public Configuration Attributes ########
 
@@ -407,6 +425,11 @@ sub decoder($) {
 Get L<"Encode::Encoding"> object to encode Unicode string using compatible
 charset recommended to be used for messages on Internet.
 
+If optional CHARSET is specified, replace encoder (and output charset
+name) of $charset object with those of CHARSET, therefore,
+$charset object will be a converter between original charset and
+new CHARSET.
+
 =cut
 
 sub encoder($$;) {
@@ -480,7 +503,7 @@ conversion will not be performed.  So these options do not have any effects.
 
 =item Replacement => REPLACEMENT
 
-Specifies error handling scheme.  See L<"ERROR HANDLING">.
+Specifies error handling scheme.  See L<"Error Handling">.
 
 =item Detect7bit => YESNO
 
@@ -656,7 +679,7 @@ conversion will not be performed.  So these options do not have any effects.
 
 =item Replacement => REPLACEMENT
 
-Specifies error handling scheme.  See L<"ERROR HANDLING">.
+Specifies error handling scheme.  See L<"Error Handling">.
 
 =item Detect7bit => YESNO
 
@@ -727,8 +750,8 @@ sub _text_encode {
     my $charset = shift;
     my $s = shift;
     my %params = @_;
-    my $replacement = uc($params{'Replacement'}) || $Config->{Replacement};
-    my $detect7bit = uc($params{'Detect7bit'}) || $Config->{Detect7bit};
+    my $replacement = uc($params{'Replacement'} || $Config->{Replacement});
+    my $detect7bit = uc($params{'Detect7bit'} || $Config->{Detect7bit});
 
     unless ($charset and $charset->{InputCharset}) {
 	if ($s =~ $NONASCIIRE) {
@@ -741,78 +764,54 @@ sub _text_encode {
     }
 
     # Unknown charset.
-    return ($s, $charset)
-	unless $charset->{Decoder};
+    unless ($charset->{Decoder}) {
+	croak "unknown charset ``$charset->{InputCharset}''"
+	    if is_utf8($s) or $s =~ /[^\x00-\xFF]/;
+	return ($s, $charset);
+    }
+
+    my $check = ($replacement and $replacement =~ /^\d+$/)?
+	$replacement:
+    {
+	'CROAK' => FB_CROAK(),
+	'STRICT' => FB_CROAK(),
+	'FALLBACK' => FB_CROAK(), # special
+	'PERLQQ' => FB_PERLQQ(),
+	'HTMLCREF' => FB_HTMLCREF(),
+	'XMLCREF' => FB_XMLCREF(),
+    }->{$replacement || ""} || 0;
 
     # Encode data by output charset if required.  If failed, fallback to
     # fallback charset.
     my $encoded;
-
-    if (is_utf8($s) or $s =~ /[^\x00-\xFF]/) {
-	if ($replacement =~ /^(?:CROAK|STRICT|FALLBACK)$/) {
+    if (is_utf8($s) or $s =~ /[^\x00-\xFF]/ or
+	$charset->{InputCharset} ne $charset->{OutputCharset}) {
+	if ($check & 0x1) { # CROAK or FALLBACK
 	    eval {
 		$encoded = $s;
 		$encoded = $charset->encode($encoded, FB_CROAK());
 	    };
 	    if ($@) {
 		if ($replacement eq "FALLBACK" and $FALLBACK_CHARSET) {
-		    $charset = MIME::Charset->new($FALLBACK_CHARSET);
-		    # croak unknown charset
-		    croak "Unknown charset: $FALLBACK_CHARSET"
-			unless $charset->{Decoder};
-		    # No charset transformation.
-		    $charset->{OutputCharset} = $charset->{InputCharset};
-		    $charset->{Encoder} = $charset->{Decoder};
-
-		    $encoded = $s;
-		    $encoded = $charset->encode($encoded);
-		} else {
-		    $@ =~ s/ at .+$//;
-		    croak $@;
-		}
-	    }
-	} elsif ($replacement eq "PERLQQ") {
-	    $encoded = $charset->encode($s, FB_PERLQQ());
-	} elsif ($replacement eq "HTMLCREF") {
-	    $encoded = $charset->encode($s, FB_HTMLCREF());
-	} elsif ($replacement eq "XMLCREF") {
-	    $encoded = $charset->encode($s, FB_XMLCREF());
-	} else {
-	    $encoded = $charset->encode($s);
-	}
-    } elsif ($charset->{InputCharset} ne $charset->{OutputCharset}) {
-	$encoded = $s;
-	if ($replacement =~ /^(?:CROAK|STRICT|FALLBACK)$/) {
-	    eval {
-		$encoded = $charset->encode($encoded, FB_CROAK());
-	    };
-	    if ($@) {
-		if ($replacement eq "FALLBACK" and $FALLBACK_CHARSET) {
 		    my $cset = MIME::Charset->new($FALLBACK_CHARSET);
 		    # croak unknown charset
-		    croak "Unknown charset: $FALLBACK_CHARSET"
-			unless $cset->{Decoder};
-		    # No charset transformations.
-		    $charset->{OutputCharset} = $cset->{OutputCharset} =
-			$cset->{InputCharset};
-		    $charset->{Encoder} = $cset->{Encoder} = $cset->{Decoder};
+		    croak "unknown charset ``$FALLBACK_CHARSET''"
+			unless $charset->{Decoder};
+		    # charset transformation
+		    $charset->encoder($cset);
 		    $encoded = $s;
-		    $encoded = $charset->encode($encoded);
+		    $encoded = $charset->encode($encoded, 0);
+		    $cset->encoder($cset);
 		    $charset = $cset;
 		} else {
 		    $@ =~ s/ at .+$//;
 		    croak $@;
 		}
 	    }
-        } elsif ($replacement eq "PERLQQ") {
-            $encoded = $charset->encode($encoded, FB_PERLQQ());
-        } elsif ($replacement eq "HTMLCREF") {
-            $encoded = $charset->encode($encoded, FB_HTMLCREF());
-        } elsif ($replacement eq "XMLCREF") {
-            $encoded = $charset->encode($encoded, FB_XMLCREF());
-        } else {
-            $encoded = $charset->encode($encoded);
-        }
+	} else {
+	    $encoded = $s;
+	    $encoded = $charset->encode($encoded, $check);
+	}
     } else {
         $encoded = $s;
     }
@@ -825,8 +824,8 @@ sub _detect_7bit_charset($) {
     my $s = shift;
     return $DEFAULT_CHARSET unless $s;
 
-    # Try to detect ISO-2022-* escape sequences.
-    foreach (@ISO2022_SEQ) {
+    # Try to detect 7-bit escape sequences.
+    foreach (@ESCAPE_SEQS) {
 	my ($seq, $cset) = @$_;
 	if (index($s, $seq) >= 0) {
             my $decoder = MIME::Charset->new($cset);
@@ -842,7 +841,7 @@ sub _detect_7bit_charset($) {
 	}
     }
 
-    # How about HZ, VIQR, ...?
+    # How about HZ, VIQR, UTF-7, ...?
 
     return $DEFAULT_CHARSET;
 }
@@ -850,7 +849,7 @@ sub _detect_7bit_charset($) {
 =item $charset->undecode(STRING [,CHECK])
 
 Encode Unicode string STRING to byte string by input charset of $charset.
-This is a equivalent to C<$charset->decoder->encode()>.
+This is equivalent to C<$charset-E<gt>decoder-E<gt>encode()>.
 
 B<Note>:
 When Unicode/multibyte support is disabled (see L<"USE_ENCODE">),
@@ -1041,6 +1040,11 @@ Synonym is C<"STRICT">.
 
 Use C<FB_PERLQQ>, C<FB_HTMLCREF> or C<FB_XMLCREF>
 scheme defined by L<Encode> module.
+
+=item numeric values
+
+Numeric values are also allowed.
+For more details see L<Encode/Handling Malformed Data>.
 
 =back
 
