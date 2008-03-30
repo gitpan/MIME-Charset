@@ -93,7 +93,7 @@ characters.
 =cut
 
 use strict;
-use vars qw(@ISA $VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS);
+use vars qw(@ISA $VERSION @EXPORT @EXPORT_OK %EXPORT_TAGS $Config);
 use Exporter;
 @ISA = qw(Exporter);
 @EXPORT = qw(body_encoding canonical_charset header_encoding output_charset
@@ -121,7 +121,7 @@ if (USE_ENCODE) {
     }
 }
 
-$VERSION = '1.003';
+$VERSION = '1.004';
 
 ######## Private Attributes ########
 
@@ -266,7 +266,7 @@ my @ESCAPE_SEQS = (
 
 ######## Public Configuration Attributes ########
 
-our $Config = {
+$Config = {
     Detect7bit =>      'YES',
     Mapping =>         'EXTENDED',
     Replacement =>     'DEFAULT',
