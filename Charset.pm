@@ -121,7 +121,7 @@ if (USE_ENCODE) {
     }
 }
 
-$VERSION = '1.005';
+$VERSION = '1.006';
 
 ######## Private Attributes ########
 
@@ -155,6 +155,8 @@ my %CHARSETS = (# input		    header enc body enc output conv
 		'ISO-2022-JP' =>	['B',	undef,	undef],
 		'KOI8-R' =>		['B',	'B',	undef],
 		'UTF-8' =>		['S',	'B',	undef],
+		'HZ-GB-2312' =>		['B',	undef,	undef],
+		'UTF-7' =>		['Q',	undef,	undef],
 		'GSM03.38' =>		[undef,	undef,	undef], # not for MIME
 		# We're making this one up to represent raw unencoded 8bit
 		'8BIT' =>		[undef,	'B',	'ISO-8859-1'],
@@ -176,6 +178,7 @@ my %CHARSET_ALIASES = (# unpreferred		preferred
 		       "UNICODE-1-1-UTF-7" =>	"UTF-7", # RFC 1642 (obs.)
 		       "UTF8" =>		"UTF-8",
 		       "UTF-8-STRICT" =>	"UTF-8", # Perl internal use
+		       "HZ" =>			"HZ-GB-2312", # RFC 1842
 		       "GSM0338" =>		"GSM03.38",
 		       );
 
@@ -219,6 +222,7 @@ my %ENCODERS = (
 		    'ISO-2022-JP-3' => [['iso-2022-jp-3', 'Encode::JIS2K'], ],
 		    'SHIFT_JISX0213'=> [['shiftjisx0213', 'Encode::JIS2K'], ],
 		    'EUC-TW'        => [['euc-tw',      'Encode::HanExtra'], ],
+		    'HZ-GB-2312'    => [['hz'], ],	# Encode::CN
 		    'GSM03.38'      => [['gsm0338'], ],	# Encode::GSM0338
 		},
 );
@@ -284,7 +288,11 @@ my $NONASCIIRE = qr{
 }x;
 
 my $ISO2022RE = qr{
-    ^ISO-2022-
+    ISO-2022-.+
+}ix;
+
+my $ASCIITRANSRE = qr{
+    HZ-GB-2312 | UTF-7
 }ix;
 
 
@@ -321,6 +329,7 @@ sub new {
     my %params = @_;
     my $mapping = uc($params{'Mapping'} || $Config->{Mapping});
 
+    $charset = "HZ" if $charset =~ /\bhz.?gb.?2312$/i; # workaround
     $charset = resolve_alias($charset) || $charset;
     $charset = $CHARSET_ALIASES{uc($charset)} || uc($charset);
     my ($henc, $benc, $outcset);
@@ -456,8 +465,8 @@ sub encoder($$;) {
 	$charset = __PACKAGE__->new($charset) unless ref $charset;
 	$self->{OutputCharset} = $charset->{InputCharset};
 	$self->{Encoder} = $charset->{Decoder};
-	#XXX$self->{BodyEncoding} = $charset->{BodyEncoding};
-	#XXX$self->{HeaderEncoding} = $charset->{HeaderEncoding};
+	$self->{BodyEncoding} = $charset->{BodyEncoding};
+	$self->{HeaderEncoding} = $charset->{HeaderEncoding};
     }
     $self->{Encoder};
 }
@@ -518,14 +527,14 @@ conversion will not be performed.  So these options do not have any effects.
 
 =over 4
 
-=item Replacement => REPLACEMENT
-
-Specifies error handling scheme.  See L<"Error Handling">.
-
 =item Detect7bit => YESNO
 
 Try auto-detecting 7-bit charset when CHARSET is not given.
 Default is C<"YES">.
+
+=item Replacement => REPLACEMENT
+
+Specifies error handling scheme.  See L<"Error Handling">.
 
 =back
 
@@ -549,24 +558,18 @@ sub body_encode {
 	$text = $self;
 	$self = __PACKAGE__->new(shift);
     }
-    my ($encoded, $charset) = &_text_encode($self, $text, @_);
+    my ($encoded, $charset) = $self->_text_encode($text, @_);
     return ($encoded, undef, 'BASE64')
 	unless $charset and $charset->{InputCharset};
     my $cset = $charset->{OutputCharset};
 
     # Determine transfer-encoding.
-    my $enc;
-    if ($encoded !~ /$NONASCIIRE/) {
-	$cset = "US-ASCII";
-	$enc = undef;
-    } else {
-	$enc = $charset->{BodyEncoding};
-    }
+    my $enc = $charset->{BodyEncoding};
 
     if (!$enc and $encoded !~ /\x00/) {	# Eliminate hostile NUL character.
         if ($encoded =~ $NON7BITRE) {	# String contains 8bit char(s).
             $enc = '8BIT';
-	} elsif ($cset =~ $ISO2022RE) {	# ISO-2022-* outputs are 7BIT.
+	} elsif ($cset =~ /^($ISO2022RE|$ASCIITRANSRE)$/) {	# 7BIT.
             $enc = '7BIT';
         } else {			# Pure ASCII.
             $enc = '7BIT';
@@ -688,14 +691,14 @@ conversion will not be performed.  So these options do not have any effects.
 
 =over 4
 
-=item Replacement => REPLACEMENT
-
-Specifies error handling scheme.  See L<"Error Handling">.
-
 =item Detect7bit => YESNO
 
 Try auto-detecting 7-bit charset when CHARSET is not given.
 Default is C<"YES">.
+
+=item Replacement => REPLACEMENT
+
+Specifies error handling scheme.  See L<"Error Handling">.
 
 =back
 
@@ -722,22 +725,16 @@ sub header_encode {
 	$text = $self;
 	$self = __PACKAGE__->new(shift);
     }
-    my ($encoded, $charset) = &_text_encode($self, $text, @_);
+    my ($encoded, $charset) = $self->_text_encode($text, @_);
     return ($encoded, '8BIT', undef)
 	unless $charset and $charset->{InputCharset};
     my $cset = $charset->{OutputCharset};
 
     # Determine encoding scheme.
-    my $enc;
-    if ($encoded !~ /$NONASCIIRE/) {
-	$cset = "US-ASCII";
-	$enc = undef;
-    } else {
-	$enc = $charset->{HeaderEncoding};
-    }
+    my $enc = $charset->{HeaderEncoding};
 
     if (!$enc and $encoded !~ $NON7BITRE) {
-	unless ($cset =~ $ISO2022RE) {	# ISO-2022-* outputs are 7BIT.
+	unless ($cset =~ /^($ISO2022RE|$ASCIITRANSRE)$/) {	# 7BIT.
             $cset = 'US-ASCII';
         }
     } elsif ($enc eq 'S') {
@@ -758,24 +755,28 @@ sub _text_encode {
     my %params = @_;
     my $replacement = uc($params{'Replacement'} || $Config->{Replacement});
     my $detect7bit = uc($params{'Detect7bit'} || $Config->{Detect7bit});
+    my $encoding = $params{'Encoding'} ||
+	(exists $params{'Encoding'}? undef: 'A'); # undocumented
 
-    unless ($charset and $charset->{InputCharset}) {
+    if (!$encoding or $encoding ne 'A') { # no 7-bit auto-detection
+	$detect7bit = 'NO';
+    }
+    unless ($charset->{InputCharset}) {
 	if ($s =~ $NON7BITRE) {
 	    return ($s, undef);
 	} elsif ($detect7bit ne "NO") {
 	    $charset = __PACKAGE__->new(&_detect_7bit_charset($s));
 	} else {
-	    $charset = __PACKAGE__->new($DEFAULT_CHARSET);
+	    $charset = __PACKAGE__->new($DEFAULT_CHARSET,
+					Mapping => 'STANDARD');
 	} 
     }
-
-    # Unknown charset.
-    unless ($charset->{Decoder}) {
-	croak "unknown charset ``$charset->{InputCharset}''"
-	    if is_utf8($s) or $s =~ /[^\x00-\xFF]/;
-	return ($s, $charset);
+    if (!$encoding or $encoding ne 'A') { # no conversion
+	$charset = $charset->dup;
+	$charset->encoder($charset);
+	$charset->{HeaderEncoding} = $encoding;
+	$charset->{BodyEncoding} = $encoding;
     }
-
     my $check = ($replacement and $replacement =~ /^\d+$/)?
 	$replacement:
     {
@@ -791,7 +792,7 @@ sub _text_encode {
     # fallback charset.
     my $encoded;
     if (is_utf8($s) or $s =~ /[^\x00-\xFF]/ or
-	$charset->{InputCharset} ne $charset->{OutputCharset}) {
+	($charset->{InputCharset} || "") ne ($charset->{OutputCharset} || "")) {
 	if ($check & 0x1) { # CROAK or FALLBACK
 	    eval {
 		$encoded = $s;
@@ -799,7 +800,8 @@ sub _text_encode {
 	    };
 	    if ($@) {
 		if ($replacement eq "FALLBACK" and $FALLBACK_CHARSET) {
-		    my $cset = __PACKAGE__->new($FALLBACK_CHARSET);
+		    my $cset = __PACKAGE__->new($FALLBACK_CHARSET,
+						Mapping => 'STANDARD');
 		    # croak unknown charset
 		    croak "unknown charset ``$FALLBACK_CHARSET''"
 			unless $charset->{Decoder};
@@ -820,6 +822,27 @@ sub _text_encode {
 	}
     } else {
         $encoded = $s;
+    }
+
+    if ($encoded !~ /$NONASCIIRE/) { # maybe ASCII
+	# check ``ASCII transformation'' charsets
+	if ($charset->{OutputCharset} =~ /^($ASCIITRANSRE)$/ and
+	    $encoded =~ /[+~]/) {
+	    my $u = $encoded;
+	    if ($charset->encoder) {
+		$u = $charset->encoder->decode($encoded); # dec. by output
+	    } elsif (!USE_ENCODE) { # workaround for pre-Encode environment
+		$u = "x$u";
+	    } else { # NOTREACHED
+		croak __PACKAGE__.": bug in _text_encode.  Report developer.";
+	    }
+	    $charset->encoder(__PACKAGE__->new($DEFAULT_CHARSET,
+					       Mapping => 'STANDARD'))
+		if $u eq $encoded;
+	} elsif ($charset->{OutputCharset} ne "US-ASCII") {
+	    $charset->encoder(__PACKAGE__->new($DEFAULT_CHARSET,
+					       Mapping => 'STANDARD'));
+	}
     }
 
     return ($encoded, $charset);
