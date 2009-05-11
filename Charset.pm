@@ -1,3 +1,4 @@
+#-*- perl -*-
 
 package MIME::Charset;
 use 5.005;
@@ -15,7 +16,7 @@ MIME::Charset - Charset Informations for MIME
 Getting charset informations:
 
     $benc = $charset->body_encoding; # e.g. "Q"
-    $cset = $charset->canonical_charset; # e.g. "US-ASCII"
+    $cset = $charset->as_string; # e.g. "US-ASCII"
     $henc = $charset->header_encoding; # e.g. "S"
     $cset = $charset->output_charset; # e.g. "ISO-2022-JP"
 
@@ -24,21 +25,24 @@ Translating text data:
     ($text, $charset, $encoding) =
         $charset->header_encode(
            "\xc9\xc2\xc5\xaa\xc0\xde\xc3\xef\xc5\xaa".
-           "\xc7\xd1\xca\xaa\xbd\xd0\xce\xcf\xb4\xef");
-    # ...returns e.g. (<converted>, "ISO-2022-JP", "B");
+           "\xc7\xd1\xca\xaa\xbd\xd0\xce\xcf\xb4\xef",
+           Charset => 'euc-jp');
+    # ...returns e.g. (<converted>, "ISO-2022-JP", "B").
 
     ($text, $charset, $encoding) =
         $charset->body_encode(
             "Collectioneur path\xe9tiquement ".
-            "\xe9clectique de d\xe9chets");
-    # ...returns e.g. (<original>, "ISO-8859-1", "QUOTED-PRINTABLE");
+            "\xe9clectique de d\xe9chets",
+            Charset => 'latin1');
+    # ...returns e.g. (<original>, "ISO-8859-1", "QUOTED-PRINTABLE").
 
     $len = $charset->encoded_header_len(
-        "Perl\xe8\xa8\x80\xe8\xaa\x9e", "b"); # e.g. 28
+        "Perl\xe8\xa8\x80\xe8\xaa\x9e",
+        Charset => 'utf-8',
+        Encoding => "b");
+    # ...returns e.g. 28.
 
 Manipulating module defaults:
-
-    use MIME::Charset;
 
     MIME::Charset::alias("csEUCKR", "euc-kr");
     MIME::Charset::default("iso-8859-1");
@@ -88,8 +92,6 @@ The B<encoding> is that used in MIME to refer to a method of representing
 a body part or a header body as sequence(s) of printable US-ASCII
 characters.
 
-=over 4
-
 =cut
 
 use strict;
@@ -107,7 +109,7 @@ use Exporter;
 		);
 use Carp qw(croak);
 
-use constant USE_ENCODE => ($] >= 5.008001)? 'Encode': '';
+use constant USE_ENCODE => ($] >= 5.008)? 'Encode': '';
 
 my @ENCODE_SUBS = qw(FB_CROAK FB_PERLQQ FB_HTMLCREF FB_XMLCREF
 		     is_utf8 resolve_alias);
@@ -121,7 +123,7 @@ if (USE_ENCODE) {
     }
 }
 
-$VERSION = '1.006.2';
+$VERSION = '1.007_01';
 
 ######## Private Attributes ########
 
@@ -300,6 +302,8 @@ my $ASCIITRANSRE = qr{
 
 =head2 Constructor
 
+=over
+
 =item $charset = MIME::Charset->new([CHARSET [, OPTS]])
 
 Create charset object.
@@ -364,7 +368,7 @@ sub _find_encoder($$) {
     my $mapping = uc(shift);
     my ($spec, $name, $module, $encoder);
 
-    my $preserveerr = $@;
+    local($@);
     foreach my $m (('EXTENDED', 'STANDARD')) {
 	next if $m eq 'EXTENDED' and $mapping ne 'EXTENDED';
 	$spec = $ENCODERS{$m}->{$charset};
@@ -375,16 +379,18 @@ sub _find_encoder($$) {
 		eval "use $module;";
 		next if $@;
 	    }
-	    $@ = $preserveerr;
 	    $encoder = Encode::find_encoding($name);
 	    return $encoder if ref $encoder;
 	}
     }
-    $@ = $preserveerr;
     return Encode::find_encoding($charset);
 }
 
+=back
+
 =head2 Getting Informations of Charsets
+
+=over
 
 =item $charset->body_encoding
 
@@ -513,7 +519,11 @@ sub output_charset($) {
     $self->{OutputCharset};
 }
 
+=back
+
 =head2 Translating Text Data
+
+=over
 
 =item $charset->body_encode(STRING [, OPTS])
 
@@ -603,6 +613,43 @@ sub decode($$$;) {
     my $s = shift;
     my $check = shift || 0;
     $self->{Decoder}->decode($s, $check);
+}
+
+=item detect_7bit_charset STRING
+
+Guess 7-bit charset that may encode a string STRING.
+
+=cut
+
+sub detect_7bit_charset($) {
+    return $DEFAULT_CHARSET unless USE_ENCODE;
+    my $s = shift;
+    return $DEFAULT_CHARSET unless $s;
+
+    # Try to detect 7-bit escape sequences.
+    foreach (@ESCAPE_SEQS) {
+	my ($seq, $cset) = @$_;
+	if (index($s, $seq) >= 0) {
+            my $decoder = __PACKAGE__->new($cset);
+            next unless $decoder->{Decoder};
+            eval {
+		my $dummy = $s;
+		$decoder->decode($dummy, FB_CROAK());
+	    };
+	    if ($@) {
+		next;
+	    }
+	    return $decoder->{InputCharset};
+	}
+    }
+
+    # How about HZ, VIQR, UTF-7, ...?
+
+    return $DEFAULT_CHARSET;
+}
+
+sub _detect_7bit_charset {
+    detect_7bit_charset(@_);
 }
 
 =item $charset->encode(STRING [,CHECK])
@@ -717,8 +764,6 @@ data) and I<encoding scheme> will be C<undef> (should not be encoded).
 I<Charset for output> will be C<"US-ASCII"> if and only if string does not
 contain any non-ASCII bytes.
 
-=back
-
 =cut
 
 sub header_encode {
@@ -770,7 +815,7 @@ sub _text_encode {
 	if ($s =~ $NON7BITRE) {
 	    return ($s, undef);
 	} elsif ($detect7bit ne "NO") {
-	    $charset = __PACKAGE__->new(&_detect_7bit_charset($s));
+	    $charset = __PACKAGE__->new(&detect_7bit_charset($s));
 	} else {
 	    $charset = __PACKAGE__->new($DEFAULT_CHARSET,
 					Mapping => 'STANDARD');
@@ -853,33 +898,6 @@ sub _text_encode {
     return ($encoded, $charset);
 }
 
-sub _detect_7bit_charset($) {
-    return $DEFAULT_CHARSET unless USE_ENCODE;
-    my $s = shift;
-    return $DEFAULT_CHARSET unless $s;
-
-    # Try to detect 7-bit escape sequences.
-    foreach (@ESCAPE_SEQS) {
-	my ($seq, $cset) = @$_;
-	if (index($s, $seq) >= 0) {
-            my $decoder = __PACKAGE__->new($cset);
-            next unless $decoder->{Decoder};
-            eval {
-		my $dummy = $s;
-		$decoder->decode($dummy, FB_CROAK());
-	    };
-	    if ($@) {
-		next;
-	    }
-	    return $decoder->{InputCharset};
-	}
-    }
-
-    # How about HZ, VIQR, UTF-7, ...?
-
-    return $DEFAULT_CHARSET;
-}
-
 =item $charset->undecode(STRING [,CHECK])
 
 Encode Unicode string STRING to byte string by input charset of $charset.
@@ -900,9 +918,11 @@ sub undecode($$$;) {
     $enc;
 }
 
+=back
+
 =head2 Manipulating Module Defaults
 
-=over 4
+=over
 
 =item alias ALIAS [, CHARSET]
 
@@ -1036,19 +1056,27 @@ sub recommended ($;$;$;$) {
     }
 }
 
+=back
+
 =head2 Constants
+
+=over
 
 =item USE_ENCODE
 
 Unicode/multibyte support flag.
 Non-empty string will be set when Unicode and multibyte support is enabled.
-Currently, this flag will be non-empty on Perl 5.8.1 or later and
+Currently, this flag will be non-empty on Perl 5.8.0 or later and
 empty string on earlier versions of Perl.
+
+=back
 
 =head2 Error Handling
 
 L<"body_encode"> and L<"header_encode"> accept following C<Replacement>
 options:
+
+=over
 
 =item C<"DEFAULT">
 
@@ -1104,12 +1132,15 @@ L<http://hatuka.nezumi.nu/repos/MIME-Charset/>.
 
 Multipurpose Internet Mail Extensions (MIME).
 
-=head1 AUTHORS
+=head1 AUTHOR
 
-Copyright (C) 2006-2008 Hatuka*nezumi - IKEDA Soji <hatuka(at)nezumi.nu>.
+Hatuka*nezumi - IKEDA Soji <hatuka(at)nezumi.nu>
 
-All rights reserved.  This program is free software; you can redistribute
-it and/or modify it under the same terms as Perl itself.
+=head1 COPYRIGHT
+
+Copyright (C) 2006-2009 Hatuka*nezumi - IKEDA Soji.
+This program is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself.
 
 =cut
 

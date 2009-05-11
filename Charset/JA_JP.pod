@@ -1,3 +1,5 @@
+#-*- perl -*-
+
 =encoding utf-8
 
 =head1 NAME
@@ -13,7 +15,7 @@ MIME::Charset::JA_JP - MIME のためのキャラクタセット情報
 キャラクタセット情報の取得:
 
     $benc = $charset->body_encoding; # 例 "Q"
-    $cset = $charset->canonical_charset; # 例 "US-ASCII"
+    $cset = $charset->as_string; # 例 "US-ASCII"
     $henc = $charset->header_encoding; # 例 "S"
     $cset = $charset->output_charset; # 例 "ISO-2022-JP"
 
@@ -22,20 +24,23 @@ MIME::Charset::JA_JP - MIME のためのキャラクタセット情報
     ($text, $charset, $encoding) =
         $charset->header_encode(
            "\xc9\xc2\xc5\xaa\xc0\xde\xc3\xef\xc5\xaa".
-           "\xc7\xd1\xca\xaa\xbd\xd0\xce\xcf\xb4\xef");
-    # ...例えば (<converted>, "ISO-2022-JP", "B") を返す
+           "\xc7\xd1\xca\xaa\xbd\xd0\xce\xcf\xb4\xef",
+           Charset => 'euc-jp');
+    # ...例えば (<変換ずみ文字列>, "ISO-2022-JP", "B") を返す。
 
     ($text, $charset, $encoding) =
         $charset->body_encode(
-            "Collectioneur path\xe9tiquement ".
-    # ...例えば (<original>, "ISO-8859-1", "QUOTED-PRINTABLE") を返す
+            "Collectioneur path\xe9tiquement ",
+            Charset => 'latin1');
+    # ...例えば (<元の文字列>, "ISO-8859-1", "QUOTED-PRINTABLE") を返す。
 
     $len = $charset->encoded_header_len(
-        "Perl\xe8\xa8\x80\xe8\xaa\x9e", "b"); # 例 28
+        "Perl\xe8\xa8\x80\xe8\xaa\x9e",
+        Charset => "utf-8",
+        Encoding => "b");
+    # ...例えば 28 を返す。
 
 モジュール既定値の操作:
-
-    use MIME::Charset;
 
     MIME::Charset::alias("csEUCKR", "euc-kr");
     MIME::Charset::default("iso-8859-1");
@@ -85,12 +90,12 @@ B<エンコーディング> とは、MIME でのそれのことで、
 メッセージ本体やメッセージヘッダ本体を印字可能な
 US-ASCII 文字の列として表現する方法を指す。
 
-=over 4
-
 
 =cut
 
 =head2 コンストラクタ
+
+=over
 
 =item $charset = MIME::Charset->new([CHARSET [, OPTS]])
 
@@ -114,7 +119,11 @@ C<"STANDARD"> は標準化されている厳密なマッピングを使う。
 
 =cut
 
+=back
+
 =head2 キャラクタセット情報の取得
+
+=over
 
 =item $charset->body_encoding
 
@@ -140,6 +149,12 @@ C<undef> (伝送エンコードしなくてよい --- 7BIT か 8BIT)
 
 キャラクタセットを Unicode に復号するのに使う
 L<"Encode::Encoding"> オブジェクトを返す。
+
+=cut
+
+=item detect_7bit_charset STRING
+
+文字列 STRING を符号化している7 ビットキャラクタセットを推測する。
 
 =cut
 
@@ -189,7 +204,11 @@ Unicode/マルチバイト対応が有効になっていないとき (L<"USE_ENC
 
 =cut
 
+=back
+
 =head2 テキストデータの変換
+
+=over
 
 =item $charset->body_encode(STRING [, OPTS])
 
@@ -305,9 +324,6 @@ I<出力のキャラクタセット> が決定できず、I<変換ずみの文�
 I<出力のキャラクタセット> が C<"US-ASCII">
 となるのは、文字列が ASCII以外のバイトを含まないときに限る。
 
-=back
-
-
 =cut
 
 =item $charset->undecode(STRING [,CHECK])
@@ -322,9 +338,11 @@ Unicode/マルチバイト対応が有効になっていないとき (L<"USE_ENC
 
 =cut
 
+=back
+
 =head2 モジュール既定値の操作
 
-=over 4
+=over
 
 =item alias ALIAS [, CHARSET]
 
@@ -408,18 +426,26 @@ L<"header_encoding">、L<"body_encoding">、L<"output_charset"> を使ってほ�
 
 =cut
 
+=back
+
 =head2 定数
+
+=over
 
 =item USE_ENCODE
 
 Unicode/マルチバイト対応フラグ。
 Unicode とマルチバイトへの対応が有効になっているときは、空でない文字列が設定されている。
-現在、このフラグは Perl 5.8.1 以降で空でなく、それより以前の Perl では空の文字列。
+現在、このフラグは Perl 5.8.0 以降で空でなく、それより以前の Perl では空の文字列。
+
+=back
 
 =head2 エラー処理
 
 L<"body_encode"> と L<"header_encode"> の
 C<Replacement> オプションには以下のものを指定できる:
+
+=over
 
 =item C<"DEFAULT">
 
@@ -477,12 +503,15 @@ L<http://hatuka.nezumi.nu/repos/MIME-Charset/> にある。
 
 Multipurpose Internet Mail Extensions (MIME).
 
-=head1 AUTHORS
+=head1 AUTHOR
 
-Copyright (C) 2006-2008 Hatuka*nezumi - IKEDA Soji <hatuka(at)nezumi.nu>.
+Hatuka*nezumi - IKEDA Soji <hatuka(at)nezumi.nu>
 
-All rights reserved.  This program is free software; you can redistribute
-it and/or modify it under the same terms as Perl itself.
+=head1 COPYRIGHT
+
+Copyright (C) 2006-2009 Hatuka*nezumi - IKEDA Soji.
+This program is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself.
 
 
 =cut
