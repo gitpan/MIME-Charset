@@ -109,12 +109,21 @@ use Exporter;
 		);
 use Carp qw(croak);
 
-use constant USE_ENCODE => ($] >= 5.008)? 'Encode': '';
+use constant USE_ENCODE => ($] >= 5.007003)? 'Encode': '';
 
 my @ENCODE_SUBS = qw(FB_CROAK FB_PERLQQ FB_HTMLCREF FB_XMLCREF
 		     is_utf8 resolve_alias);
 if (USE_ENCODE) {
     eval "use ".USE_ENCODE." \@ENCODE_SUBS;";
+    if ($@) { # Perl 5.7.3 + Encode 0.40
+	eval "use ".USE_ENCODE." qw(is_utf8);";
+	require MIME::Charset::_Compat;
+	for my $sub (@ENCODE_SUBS) {
+	    no strict "refs";
+	    *{$sub} = \&{"MIME::Charset::_Compat::$sub"}
+		unless $sub eq 'is_utf8';
+	}
+    }
 } else {
     require MIME::Charset::_Compat;
     for my $sub (@ENCODE_SUBS) {
@@ -123,7 +132,7 @@ if (USE_ENCODE) {
     }
 }
 
-$VERSION = '1.008';
+$VERSION = '1.008.1';
 
 ######## Private Attributes ########
 
@@ -344,6 +353,7 @@ sub new {
     my $class = shift;
     my $charset = shift;
     return bless {}, $class unless $charset;
+    return bless {}, $class if 75 < length $charset; # w/a for CPAN RT #65796.
     my %params = @_;
     my $mapping = uc($params{'Mapping'} || $Config->{Mapping});
 
@@ -645,7 +655,7 @@ Guess 7-bit charset that may encode a string STRING.
 =cut
 
 sub detect_7bit_charset($) {
-    return $DEFAULT_CHARSET unless USE_ENCODE;
+    return $DEFAULT_CHARSET unless &USE_ENCODE;
     my $s = shift;
     return $DEFAULT_CHARSET unless $s;
 
@@ -1096,7 +1106,7 @@ sub recommended ($;$;$;$) {
 
 Unicode/multibyte support flag.
 Non-empty string will be set when Unicode and multibyte support is enabled.
-Currently, this flag will be non-empty on Perl 5.8.0 or later and
+Currently, this flag will be non-empty on Perl 5.7.3 or later and
 empty string on earlier versions of Perl.
 
 =back
@@ -1166,7 +1176,7 @@ L<http://hatuka.nezumi.nu/repos/MIME-Charset/>.
 
 =over 4
 
-=item o
+=item *
 
 new() method returns an object when CHARSET argument is not specified.
 
@@ -1176,7 +1186,7 @@ new() method returns an object when CHARSET argument is not specified.
 
 =over 4
 
-=item o
+=item *
 
 Restrict characters in encoded-word according to RFC 2047 section 5 (3).
 This also affects return value of encoded_header_len() method.
@@ -1187,11 +1197,11 @@ This also affects return value of encoded_header_len() method.
 
 =over 4
 
-=item o
+=item *
 
 body_encoding() method may also returns C<"S">.
 
-=item o
+=item *
 
 Return value of body_encode() method for UTF-8 may include
 C<"QUOTED-PRINTABLE"> encoding item that in earlier versions was fixed to
